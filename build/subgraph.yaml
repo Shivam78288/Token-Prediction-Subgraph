@@ -1,6 +1,6 @@
 specVersion: 0.0.2
 schema:
-  file: ./schema.graphql
+  file: schema.graphql
 dataSources:
   - kind: ethereum
     name: EthTokenMarket
@@ -20,7 +20,7 @@ dataSources:
         - Bets
       abis:
         - name: EthTokenMarket
-          file: ./abis/EthTokenMarket.json
+          file: EthTokenMarket\abis\EthTokenMarket.json
       eventHandlers:
         - event: Bet(indexed uint8,indexed address,indexed uint256,uint256)
           handler: handleBet
@@ -40,4 +40,4 @@ dataSources:
           handler: handleStartRound
         - event: Unpause(uint256)
           handler: handleUnpause
-      file: ./src/mapping.ts
+      file: EthTokenMarket\EthTokenMarket.wasm

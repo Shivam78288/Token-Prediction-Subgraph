@@ -1,110 +1,301 @@
-import { BigInt } from "@graphprotocol/graph-ts"
+/* eslint-disable prefer-const */
+import { BigDecimal, BigInt, Bytes, log } from "@graphprotocol/graph-ts";
+import { concat } from "@graphprotocol/graph-ts/helper-functions";
+import { Bets, Market, Round, User } from "../generated/schema";
 import {
-  EthTokenMarket,
   Bet,
   Claim,
-  ClaimTreasury,
   EndRound,
   LockRound,
-  MinBetAmountUpdated,
   Pause,
-  Paused,
   RatesUpdated,
   RewardsCalculated,
   StartRound,
   Unpause,
-  Unpaused
-} from "../generated/EthTokenMarket/EthTokenMarket"
-import { ExampleEntity } from "../generated/schema"
+} from "../generated/EthTokenMarket/EthTokenMarket";
 
-export function handleBet(event: Bet): void {
-  // Entities can be loaded from the store using a string ID; this ID
-  // needs to be unique across all entities of the same type
-  let entity = ExampleEntity.load(event.transaction.from.toHex())
+let ZERO_BI = BigInt.fromI32(0);
+let ONE_BI = BigInt.fromI32(1);
+let ZERO_BD = BigDecimal.fromString("0");
+let EIGHT_BD = BigDecimal.fromString("1e8");
+let EIGHTEEN_BD = BigDecimal.fromString("1e18");
 
-  // Entities only exist after they have been saved to the store;
-  // `null` checks allow to create entities on demand
-  if (!entity) {
-    entity = new ExampleEntity(event.transaction.from.toHex())
+// Prediction fees
+let BASE_REWARD_RATE = BigInt.fromI32(3);
+let BASE_TREASURY_RATE = BigInt.fromI32(97);
 
-    // Entity fields can be set using simple assignments
-    entity.count = BigInt.fromI32(0)
+/**
+ * PAUSE
+ */
+
+export function handlePause(event: Pause): void {
+  let market = Market.load("1");
+  if (market === null) {
+    market = new Market("1");
+    market.epoch = event.params.epoch.toString();
+    market.paused = true;
+    market.totalUsers = ZERO_BI;
+    market.totalBets = ZERO_BI;
+    market.totalBetsBull = ZERO_BI;
+    market.totalBetsBear = ZERO_BI;
+    market.totalToken = ZERO_BD;
+    market.totalTokenBull = ZERO_BD;
+    market.totalTokenBear = ZERO_BD;
+    market.totalTokenTreasury = ZERO_BD;
+    market.rewardRate = BASE_REWARD_RATE;
+    market.treasuryRate = BASE_TREASURY_RATE;
+    market.save();
   }
+  market.epoch = event.params.epoch.toString();
+  market.paused = true;
+  market.save();
 
-  // BigInt and BigDecimal math are supported
-  entity.count = entity.count + BigInt.fromI32(1)
+  // Pause event was called, cancelling rounds.
+  let round = Round.load(event.params.epoch.toString());
+  if (round !== null) {
+    round.failed = true;
+    round.save();
 
-  // Entity fields can be set based on event parameters
-  entity.position = event.params.position
-  entity.sender = event.params.sender
-
-  // Entities can be written to the store with `.save()`
-  entity.save()
-
-  // Note: If a handler doesn't require existing field values, it is faster
-  // _not_ to load the entity from the store. Instead, create it fresh with
-  // `new Entity(...)`, set the fields that should be updated and save the
-  // entity back to the store. Fields that were not set or unset remain
-  // unchanged, allowing for partial updates to be applied.
-
-  // It is also possible to access smart contracts from mappings. For
-  // example, the contract that has emitted the event can be connected to
-  // with:
-  //
-  // let contract = Contract.bind(event.address)
-  //
-  // The following functions can then be called on this contract to access
-  // state variables and other data:
-  //
-  // - contract.TOTAL_RATE(...)
-  // - contract.admin(...)
-  // - contract.bettable(...)
-  // - contract.buffer(...)
-  // - contract.claimable(...)
-  // - contract.closeInterval(...)
-  // - contract.currentEpoch(...)
-  // - contract.genesisLockOnce(...)
-  // - contract.genesisStartOnce(...)
-  // - contract.getUserRounds(...)
-  // - contract.ledger(...)
-  // - contract.lockInterval(...)
-  // - contract.minBetAmount(...)
-  // - contract.name(...)
-  // - contract.operator(...)
-  // - contract.oracleRoundId(...)
-  // - contract.oracleUpdateAllowance(...)
-  // - contract.owner(...)
-  // - contract.paused(...)
-  // - contract.refundable(...)
-  // - contract.rewardRate(...)
-  // - contract.rounds(...)
-  // - contract.tokenPred(...)
-  // - contract.tokenStaked(...)
-  // - contract.treasuryAmount(...)
-  // - contract.treasuryRate(...)
-  // - contract.userRounds(...)
+    // Also fail the previous round because it will not complete.
+    let previousRound = Round.load(round.previous!);
+    if (previousRound !== null) {
+      previousRound.failed = true;
+      previousRound.save();
+    }
+  }
 }
 
-export function handleClaim(event: Claim): void {}
+export function handleUnpause(event: Unpause): void {
+  let market = Market.load("1");
+  if (market === null) {
+    market = new Market("1");
+    market.epoch = event.params.epoch.toString();
+    market.paused = false;
+    market.totalUsers = ZERO_BI;
+    market.totalBets = ZERO_BI;
+    market.totalBetsBull = ZERO_BI;
+    market.totalBetsBear = ZERO_BI;
+    market.totalToken = ZERO_BD;
+    market.totalTokenBull = ZERO_BD;
+    market.totalTokenBear = ZERO_BD;
+    market.totalTokenTreasury = ZERO_BD;
+    market.rewardRate = BASE_REWARD_RATE;
+    market.treasuryRate = BASE_TREASURY_RATE;
+    market.save();
+  }
+  market.epoch = event.params.epoch.toString();
+  market.paused = false;
+  market.save();
+}
 
-export function handleClaimTreasury(event: ClaimTreasury): void {}
+/**
+ * MARKET
+ */
 
-export function handleEndRound(event: EndRound): void {}
+export function handleRatesUpdated(event: RatesUpdated): void {
+  let market = Market.load("1");
+  if (market === null) {
+    market = new Market("1");
+    market.epoch = event.params.epoch.toString();
+    market.paused = false;
+    market.totalUsers = ZERO_BI;
+    market.totalBets = ZERO_BI;
+    market.totalBetsBull = ZERO_BI;
+    market.totalBetsBear = ZERO_BI;
+    market.totalToken = ZERO_BD;
+    market.totalTokenBull = ZERO_BD;
+    market.totalTokenBear = ZERO_BD;
+    market.totalTokenTreasury = ZERO_BD;
+    market.rewardRate = BASE_REWARD_RATE;
+    market.treasuryRate = BASE_TREASURY_RATE;
+    market.save();
+  }
+  market.rewardRate = event.params.rewardRate;
+  market.treasuryRate = event.params.treasuryRate;
+  market.save();
+}
 
-export function handleLockRound(event: LockRound): void {}
+/**
+ * ROUND
+ */
 
-export function handleMinBetAmountUpdated(event: MinBetAmountUpdated): void {}
+export function handleStartRound(event: StartRound): void {
+  let market = Market.load("1");
+  if (market === null) {
+    market = new Market("1");
+    market.epoch = event.params.epoch.toString();
+    market.paused = false;
+    market.totalUsers = ZERO_BI;
+    market.totalBets = ZERO_BI;
+    market.totalBetsBull = ZERO_BI;
+    market.totalBetsBear = ZERO_BI;
+    market.totalToken = ZERO_BD;
+    market.totalTokenBull = ZERO_BD;
+    market.totalTokenBear = ZERO_BD;
+    market.totalTokenTreasury = ZERO_BD;
+    market.rewardRate = BASE_REWARD_RATE;
+    market.treasuryRate = BASE_TREASURY_RATE;
+    market.save();
+  }
 
-export function handlePause(event: Pause): void {}
+  let round = Round.load(event.params.epoch.toString());
+  if (round === null) {
+    round = new Round(event.params.epoch.toString());
+    round.epoch = event.params.epoch;
+    round.previous = event.params.epoch.equals(ZERO_BI) ? null : event.params.epoch.minus(ONE_BI).toString();
+    round.startAt = event.block.timestamp;
+    round.startBlock = event.block.number;
+    round.startHash = event.transaction.hash;
+    round.openPrice = event.params.price.divDecimal(EIGHT_BD);
+    round.totalBets = ZERO_BI;
+    round.totalAmount = ZERO_BD;
+    round.bullBets = ZERO_BI;
+    round.bullAmount = ZERO_BD;
+    round.bearBets = ZERO_BI;
+    round.bearAmount = ZERO_BD;
+    round.save();
+  }
 
-export function handlePaused(event: Paused): void {}
+  market.epoch = round.id;
+  market.paused = false;
+  market.save();
+}
 
-export function handleRatesUpdated(event: RatesUpdated): void {}
+export function handleLockRound(event: LockRound): void {
+  let round = Round.load(event.params.epoch.toString());
+  if (round === null) {
+    log.error("Tried to lock round without an existing round (epoch: {}).", [event.params.epoch.toString()]);
+  }
 
-export function handleRewardsCalculated(event: RewardsCalculated): void {}
+  round!.lockAt = event.block.timestamp;
+  round!.lockBlock = event.block.number;
+  round!.lockHash = event.transaction.hash;
+  round!.save();
+}
 
-export function handleStartRound(event: StartRound): void {}
+export function handleEndRound(event: EndRound): void {
+  let round = Round.load(event.params.epoch.toString());
+  if (round === null) {
+    log.error("Tried to end round without an existing round (epoch: {}).", [event.params.epoch.toString()]);
+  }
 
-export function handleUnpause(event: Unpause): void {}
+  round!.endAt = event.block.timestamp;
+  round!.endBlock = event.block.number;
+  round!.endHash = event.transaction.hash;
+  round!.closePrice = event.params.price.divDecimal(EIGHT_BD);
 
-export function handleUnpaused(event: Unpaused): void {}
+  // Get round result based on lock/close price.
+  if ((round!.closePrice as BigDecimal).gt(round!.openPrice as BigDecimal)) {
+    round!.position = "Bull";
+  } else if ((round!.closePrice as BigDecimal).lt(round!.openPrice as BigDecimal)) {
+    round!.position = "Bear";
+  } else {
+    round!.position = null;
+  }
+  round!.failed = false;
+
+  round!.save();
+}
+
+export function handleBet(event: Bet): void {
+  let market = Market.load("1");
+  if (market === null) {
+    log.error("Incorrect market queried", []);
+  }
+  market!.totalBets = market!.totalBets.plus(ONE_BI);
+  market!.totalToken = market!.totalToken.plus(event.params.amount.divDecimal(EIGHTEEN_BD)) as BigDecimal;
+
+  if(event.params.position === 0) {
+    market!.totalBetsBull = market!.totalBetsBull.plus(ONE_BI);
+    market!.totalTokenBull = market!.totalTokenBull.plus(event.params.amount.divDecimal(EIGHTEEN_BD)) as BigDecimal;
+  }
+  else{
+    market!.totalBetsBear = market!.totalBetsBear.plus(ONE_BI);
+    market!.totalTokenBear = market!.totalTokenBear.plus(event.params.amount.divDecimal(EIGHTEEN_BD)) as BigDecimal;
+  }
+  market!.save();
+
+  let round = Round.load(event.params.currentEpoch.toString());
+  if (round === null) {
+    log.error("Tried to bet without an existing round (epoch: {}).", [event.params.currentEpoch.toString()]);
+  }
+  round!.totalBets = round!.totalBets.plus(ONE_BI);
+  round!.totalAmount = round!.totalAmount.plus(event.params.amount.divDecimal(EIGHTEEN_BD));
+  if(event.params.position === 0) {
+    round!.bullBets = round!.bullBets.plus(ONE_BI);
+    round!.bullAmount = round!.bullAmount.plus(event.params.amount.divDecimal(EIGHTEEN_BD));
+  }
+  else{
+    round!.bearBets = round!.bearBets.plus(ONE_BI);
+    round!.bearAmount = round!.bearAmount.plus(event.params.amount.divDecimal(EIGHTEEN_BD));
+  }
+  round!.save();
+
+  // Fail safe condition in case the user has not been created yet.
+  let user = User.load(event.params.sender.toHex());
+  if (user === null) {
+    user = new User(event.params.sender.toHex());
+    user.address = event.params.sender;
+    user.createdAt = event.block.timestamp;
+    user.updatedAt = event.block.timestamp;
+    user.block = event.block.number;
+    user.totalBets = ZERO_BI;
+    user.totalToken = ZERO_BD;
+
+    market!.totalUsers = market!.totalUsers.plus(ONE_BI);
+    market!.save();
+  }
+  user.updatedAt = event.block.timestamp;
+  user.totalBets = user.totalBets.plus(ONE_BI);
+  user.totalToken = user.totalToken.plus(event.params.amount.divDecimal(EIGHTEEN_BD));
+  user.save();
+
+  let betId = concat(event.params.sender, Bytes.fromI32(event.params.currentEpoch.toI32())).toHex();
+  let bet = new Bets(betId);
+  bet.round = round!.id;
+  bet.user = user.id;
+  bet.hash = event.transaction.hash;
+  bet.amount = event.params.amount.divDecimal(EIGHTEEN_BD);
+  if(event.params.position === 0) {
+    bet.position = "Bull";
+  }
+  else{
+    bet.position = "Bear";
+  }
+  bet.claimed = false;
+  bet.createdAt = event.block.timestamp;
+  bet.updatedAt = event.block.timestamp;
+  bet.block = event.block.number;
+  bet.save();
+}
+
+
+export function handleClaim(event: Claim): void {
+  let betId = concat(event.params.sender, Bytes.fromI32(event.params.currentEpoch.toI32())).toHex();
+  let bet = Bets.load(betId);
+  if (bet !== null) {
+    bet.claimed = true;
+    bet.claimedAmount = event.params.amount.divDecimal(EIGHTEEN_BD);
+    bet.claimedHash = event.transaction.hash;
+    bet.updatedAt = event.block.timestamp;
+    bet.save();
+  }
+}
+
+export function handleRewardsCalculated(event: RewardsCalculated): void {
+  let market = Market.load("1");
+  if (market === null) {
+    log.error("Tried query market after rewards were calculated for a round", []);
+  }
+  market!.totalTokenTreasury = market!.totalTokenTreasury.plus(event.params.treasuryAmount.divDecimal(EIGHTEEN_BD));
+  market!.save();
+
+  let round = Round.load(event.params.epoch.toString());
+  if (round === null) {
+    log.error("Tried query round (epoch: {}) after rewards were calculated for a round", [
+      event.params.epoch.toString(),
+    ]);
+  }
+  round!.totalAmountTreasury = event.params.treasuryAmount.divDecimal(EIGHTEEN_BD);
+  round!.save();
+}
